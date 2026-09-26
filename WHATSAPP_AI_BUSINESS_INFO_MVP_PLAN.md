@@ -633,6 +633,20 @@ Laravel → WhatsApp
 
 بدون ربط Gemini بعد.
 
+### Production Number Safety (WhatsApp Business App Coexistence)
+
+The production number currently runs on the WhatsApp Business App. The intended
+integration is WhatsApp Business App + WhatsApp Cloud API on the same number
+through the official Coexistence onboarding. Therefore:
+
+- Development and webhook/send-receive testing must use Meta's test number first.
+- Do not register, migrate, deregister, delete, or modify the production number during initial development.
+- Before connecting production, audit its current Meta/WhatsApp Business state.
+- Production onboarding must use the official WhatsApp Business App + Cloud API Coexistence flow.
+- Do not perform full Cloud API migration unless explicitly approved later.
+- Existing linked devices may need to be re-linked after Coexistence onboarding.
+- Connecting the production number is a separate final step after test-number integration works.
+
 ---
 
 ## Prompt 4 — Full Orchestration
@@ -686,6 +700,26 @@ Save incoming
 0 Gemini calls
 0 WhatsApp replies
 ```
+
+### Conversation History Rule (Phase 4)
+
+When building recent conversation history, the current incoming message must NOT
+also be included in history if it is separately passed as the current customer
+message.
+
+Expected:
+
+previous messages
++
+current message once
+
+Never:
+
+previous messages
++
+current message in history
++
+same current message again
 
 ---
 

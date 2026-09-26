@@ -359,4 +359,44 @@ class GeminiServiceTest extends TestCase
     {
         $this->assertInstanceOf(GeminiService::class, $this->app->make(AiService::class));
     }
+
+    public function test_reply_with_missing_reason_becomes_handoff(): void
+    {
+        Http::fake(['*' => Http::response($this->geminiResponse([
+            'action' => 'reply',
+            'reply' => 'نعم.',
+        ]), 200)]);
+
+        $decision = $this->service()->decide($this->profile(), [], 'مرحبا');
+
+        $this->assertTrue($decision->isHandoff());
+        $this->assertNull($decision->reply);
+    }
+
+    public function test_reply_with_blank_reason_becomes_handoff(): void
+    {
+        Http::fake(['*' => Http::response($this->geminiResponse([
+            'action' => 'reply',
+            'reply' => 'نعم.',
+            'reason' => '   ',
+        ]), 200)]);
+
+        $decision = $this->service()->decide($this->profile(), [], 'مرحبا');
+
+        $this->assertTrue($decision->isHandoff());
+        $this->assertNull($decision->reply);
+    }
+
+    public function test_handoff_with_missing_reason_becomes_handoff_safely(): void
+    {
+        Http::fake(['*' => Http::response($this->geminiResponse([
+            'action' => 'handoff',
+            'reply' => 'Text that must be discarded.',
+        ]), 200)]);
+
+        $decision = $this->service()->decide($this->profile(), [], 'مرحبا');
+
+        $this->assertTrue($decision->isHandoff());
+        $this->assertNull($decision->reply);
+    }
 }

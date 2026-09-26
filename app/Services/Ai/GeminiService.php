@@ -186,6 +186,11 @@ final class GeminiService implements AiService
                 'parts' => [['text' => self::SYSTEM_INSTRUCTION]],
             ],
             'contents' => $contents,
+            // NOTE: Google's current docs mark `responseSchema` as deprecated in favor of
+            // `responseFormat`, but that contract uses different schema conventions and cannot
+            // be verified here without a live API key. `responseSchema` is retained until the
+            // new contract is confirmed against the real API. Application-side validation in
+            // AiReplyDecision remains the source of truth either way.
             'generationConfig' => [
                 'responseMimeType' => 'application/json',
                 'responseSchema' => [

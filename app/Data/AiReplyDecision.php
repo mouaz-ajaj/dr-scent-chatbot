@@ -31,6 +31,7 @@ final readonly class AiReplyDecision
      *
      * Enforces the application invariants:
      * - only reply/handoff actions are accepted;
+     * - reason must exist, be a string, and not be blank;
      * - handoff always carries a null reply, even if the model sent text;
      * - reply must be a non-blank string, otherwise the payload is rejected.
      *
@@ -46,7 +47,11 @@ final readonly class AiReplyDecision
             throw new InvalidArgumentException('AI decision has an unknown action.');
         }
 
-        $reason = isset($data['reason']) && is_string($data['reason']) ? $data['reason'] : '';
+        $reason = $data['reason'] ?? null;
+
+        if (! is_string($reason) || trim($reason) === '') {
+            throw new InvalidArgumentException('AI decision has a missing or blank reason.');
+        }
 
         if ($action === self::ACTION_HANDOFF) {
             return self::handoff($reason);
