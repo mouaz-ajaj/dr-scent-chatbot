@@ -449,6 +449,14 @@ Decision
 WhatsApp if needed
 ```
 
+### Operational Note: One Queue Worker Only
+
+Initial MVP queue deployment: **one worker only** (`php artisan queue:work` once).
+
+Messages for a customer rely on DB uniqueness for idempotency, but ordering and
+race safety assume sequential processing. If future scaling introduces multiple
+workers, per-conversation serialization must be added before enabling them.
+
 ---
 
 # Failure Policy

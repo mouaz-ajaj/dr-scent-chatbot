@@ -2,10 +2,12 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\ProcessWhatsAppMessage;
 use App\Models\Conversation;
 use App\Services\Ai\AiService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
 
@@ -236,6 +238,8 @@ class WhatsAppWebhookTest extends TestCase
 
     public function test_webhook_does_not_call_ai_service(): void
     {
+        Queue::fake();
+
         $this->mock(AiService::class, function ($mock): void {
             $mock->shouldNotReceive('decide');
         });
@@ -247,6 +251,7 @@ class WhatsAppWebhookTest extends TestCase
 
     public function test_webhook_does_not_send_a_whatsapp_reply(): void
     {
+        Queue::fake();
         Http::fake();
 
         $this->postRaw(
@@ -258,6 +263,8 @@ class WhatsAppWebhookTest extends TestCase
 
     public function test_webhook_does_not_alter_conversation_state(): void
     {
+        Queue::fake();
+
         $conversation = Conversation::create(['phone_number' => '965000000001']);
 
         $this->postRaw(
@@ -269,5 +276,56 @@ class WhatsAppWebhookTest extends TestCase
         $this->assertSame(Conversation::STATUS_ACTIVE, $fresh->status);
         $this->assertFalse($fresh->needs_human);
         $this->assertSame(0, $fresh->messages()->count());
+    }
+
+    public function test_valid_text_webhook_dispatches_job(): void
+    {
+        Queue::fake();
+
+        $this->postRaw(
+            $this->envelope([$this->textMessage('wamid.1', '965000000001', 'مرحبا')])
+        )->assertStatus(200);
+
+        Queue::assertPushed(ProcessWhatsAppMessage::class, 1);
+        Queue::assertPushed(ProcessWhatsAppMessage::class, function (ProcessWhatsAppMessage $job): bool {
+            return $job->whatsappMessageId === 'wamid.1'
+                && $job->senderPhone === '965000000001'
+                && $job->recipientPhoneNumberId === '999'
+                && $job->body === 'مرحبا';
+        });
+    }
+
+    public function test_multiple_messages_dispatch_multiple_jobs(): void
+    {
+        Queue::fake();
+
+        $this->postRaw($this->envelope([
+            $this->textMessage('wamid.1', '965000000001', 'one'),
+            $this->textMessage('wamid.2', '965000000002', 'two'),
+        ]))->assertStatus(200);
+
+        Queue::assertPushed(ProcessWhatsAppMessage::class, 2);
+    }
+
+    public function test_foreign_number_dispatches_zero_jobs(): void
+    {
+        Queue::fake();
+
+        $this->postRaw(
+            $this->envelope([$this->textMessage('wamid.1', '965000000001', 'مرحبا')], [], 'other-number-id')
+        )->assertStatus(200);
+
+        Queue::assertNothingPushed();
+    }
+
+    public function test_unsupported_events_dispatch_zero_jobs(): void
+    {
+        Queue::fake();
+
+        $this->postRaw(
+            $this->envelope([], [['id' => 'wamid.1', 'status' => 'delivered']])
+        )->assertStatus(200);
+
+        Queue::assertNothingPushed();
     }
 }

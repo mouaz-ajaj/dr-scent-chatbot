@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Data\IncomingWhatsAppMessage;
+use App\Jobs\ProcessWhatsAppMessage;
 use App\Services\WhatsApp\WhatsAppWebhookParser;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -38,11 +39,10 @@ class WhatsAppWebhookController extends Controller
     /**
      * Receive a Meta webhook event.
      *
-     * Phase 3 transport boundary: verify the request signature, parse supported
-     * text messages addressed to our configured number, and acknowledge Meta.
-     * Messages for any other number are acknowledged but not treated as
-     * supported. No AI, no replies, no conversation state changes — Phase 4
-     * consumes the parsed messages.
+     * Transport boundary: verify the request signature, parse supported text
+     * messages addressed to our configured number, dispatch one queued job per
+     * message, and acknowledge Meta immediately. No AI, no replies, no
+     * conversation state changes happen here.
      */
     public function receive(Request $request, WhatsAppWebhookParser $parser): Response
     {
@@ -66,6 +66,15 @@ class WhatsAppWebhookController extends Controller
                 && $configured !== ''
                 && $message->recipientPhoneNumberId === $configured
         ));
+
+        foreach ($messages as $message) {
+            ProcessWhatsAppMessage::dispatch(
+                $message->whatsappMessageId,
+                $message->senderPhone,
+                $message->recipientPhoneNumberId,
+                $message->body,
+            );
+        }
 
         return response()->json(['received' => count($messages)]);
     }
