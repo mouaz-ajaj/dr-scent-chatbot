@@ -8,11 +8,11 @@ use Tests\TestCase;
 
 class WhatsAppWebhookParserTest extends TestCase
 {
-    private function envelope(array $messages = [], array $statuses = []): array
+    private function envelope(array $messages = [], array $statuses = [], string $phoneNumberId = '999'): array
     {
         $value = [
             'messaging_product' => 'whatsapp',
-            'metadata' => ['display_phone_number' => '15551234567', 'phone_number_id' => '999'],
+            'metadata' => ['display_phone_number' => '15551234567', 'phone_number_id' => $phoneNumberId],
         ];
 
         if ($messages !== []) {
@@ -61,13 +61,13 @@ class WhatsAppWebhookParserTest extends TestCase
             'object' => 'whatsapp_business_account',
             'entry' => [
                 ['id' => 'waba-1', 'changes' => [
-                    ['value' => ['messages' => [
+                    ['value' => ['metadata' => ['phone_number_id' => '999'], 'messages' => [
                         $this->textMessage('wamid.1', '965000000001', 'one'),
                         $this->textMessage('wamid.2', '965000000002', 'two'),
                     ]], 'field' => 'messages'],
                 ]],
                 ['id' => 'waba-1', 'changes' => [
-                    ['value' => ['messages' => [
+                    ['value' => ['metadata' => ['phone_number_id' => '999'], 'messages' => [
                         $this->textMessage('wamid.3', '965000000001', 'three'),
                     ]], 'field' => 'messages'],
                 ]],
@@ -125,5 +125,52 @@ class WhatsAppWebhookParserTest extends TestCase
 
         $this->assertSame('wamid.HBgMNTY1-fake-ID_123', $messages[0]->whatsappMessageId);
         $this->assertSame('96536548601', $messages[0]->senderPhone);
+    }
+
+    public function test_recipient_phone_number_id_is_preserved_exactly(): void
+    {
+        $messages = (new WhatsAppWebhookParser)->parse(
+            $this->envelope([$this->textMessage('wamid.1', '965', 'hi')], [], 'phone-id-ABC-123')
+        );
+
+        $this->assertCount(1, $messages);
+        $this->assertSame('phone-id-ABC-123', $messages[0]->recipientPhoneNumberId);
+    }
+
+    public function test_message_without_metadata_phone_number_id_is_ignored(): void
+    {
+        $parser = new WhatsAppWebhookParser;
+        $message = [$this->textMessage('wamid.1', '965', 'hi')];
+
+        $noMetadata = ['object' => 'whatsapp_business_account', 'entry' => [
+            ['id' => 'waba-1', 'changes' => [['value' => ['messages' => $message], 'field' => 'messages']]],
+        ]];
+        $this->assertSame([], $parser->parse($noMetadata));
+
+        $emptyMetadata = ['object' => 'whatsapp_business_account', 'entry' => [
+            ['id' => 'waba-1', 'changes' => [['value' => ['metadata' => [], 'messages' => $message], 'field' => 'messages']]],
+        ]];
+        $this->assertSame([], $parser->parse($emptyMetadata));
+
+        $blankId = ['object' => 'whatsapp_business_account', 'entry' => [
+            ['id' => 'waba-1', 'changes' => [['value' => ['metadata' => ['phone_number_id' => ''], 'messages' => $message], 'field' => 'messages']]],
+        ]];
+        $this->assertSame([], $parser->parse($blankId));
+    }
+
+    public function test_non_whatsapp_object_is_ignored(): void
+    {
+        $payload = $this->envelope([$this->textMessage('wamid.1', '965', 'hi')]);
+        $payload['object'] = 'page';
+
+        $this->assertSame([], (new WhatsAppWebhookParser)->parse($payload));
+    }
+
+    public function test_non_message_field_is_ignored(): void
+    {
+        $payload = $this->envelope([$this->textMessage('wamid.1', '965', 'hi')]);
+        $payload['entry'][0]['changes'][0]['field'] = 'history';
+
+        $this->assertSame([], (new WhatsAppWebhookParser)->parse($payload));
     }
 }

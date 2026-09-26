@@ -25,7 +25,7 @@ final class WhatsAppService
         return new self(
             accessToken: (string) ($config['access_token'] ?? ''),
             phoneNumberId: (string) ($config['phone_number_id'] ?? ''),
-            apiVersion: (string) ($config['api_version'] ?? 'v22.0'),
+            apiVersion: (string) ($config['api_version'] ?? ''),
             baseUrl: (string) ($config['base_url'] ?? 'https://graph.facebook.com'),
             timeout: 15,
         );
@@ -46,6 +46,18 @@ final class WhatsAppService
     {
         if (trim($this->accessToken) === '' || trim($this->phoneNumberId) === '') {
             throw new WhatsAppException('WhatsApp is not configured.');
+        }
+
+        if (trim($this->apiVersion) === '') {
+            throw new WhatsAppException('WhatsApp API version is not configured.');
+        }
+
+        if (trim($to) === '') {
+            throw new WhatsAppException('WhatsApp recipient is missing.');
+        }
+
+        if (trim($body) === '') {
+            throw new WhatsAppException('WhatsApp message body is missing.');
         }
 
         $url = "{$this->baseUrl}/{$this->apiVersion}/{$this->phoneNumberId}/messages";

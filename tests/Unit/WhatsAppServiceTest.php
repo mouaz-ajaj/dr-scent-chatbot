@@ -88,6 +88,45 @@ class WhatsAppServiceTest extends TestCase
         $this->service()->sendText('965', 'hi');
     }
 
+    public function test_blank_api_version_fails_before_http(): void
+    {
+        Http::fake();
+
+        try {
+            $this->service(['api_version' => ''])->sendText('965', 'hi');
+
+            $this->fail('Expected a WhatsAppException for a blank API version.');
+        } catch (WhatsAppException) {
+            Http::assertNothingSent();
+        }
+    }
+
+    public function test_blank_recipient_fails_before_http(): void
+    {
+        Http::fake();
+
+        try {
+            $this->service()->sendText('   ', 'hi');
+
+            $this->fail('Expected a WhatsAppException for a blank recipient.');
+        } catch (WhatsAppException) {
+            Http::assertNothingSent();
+        }
+    }
+
+    public function test_blank_body_fails_before_http(): void
+    {
+        Http::fake();
+
+        try {
+            $this->service()->sendText('965', '   ');
+
+            $this->fail('Expected a WhatsAppException for a blank body.');
+        } catch (WhatsAppException) {
+            Http::assertNothingSent();
+        }
+    }
+
     public function test_missing_configuration_fails_safely(): void
     {
         Http::fake();

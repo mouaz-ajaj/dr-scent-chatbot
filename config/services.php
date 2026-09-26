@@ -30,7 +30,7 @@ return [
         'phone_number_id' => env('WHATSAPP_PHONE_NUMBER_ID'),
         'verify_token' => env('WHATSAPP_VERIFY_TOKEN'),
         'app_secret' => env('WHATSAPP_APP_SECRET'),
-        'api_version' => env('WHATSAPP_API_VERSION', 'v22.0'),
+        'api_version' => env('WHATSAPP_API_VERSION'),
         'base_url' => env('WHATSAPP_BASE_URL', 'https://graph.facebook.com'),
     ],
 

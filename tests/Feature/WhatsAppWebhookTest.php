@@ -21,6 +21,7 @@ class WhatsAppWebhookTest extends TestCase
 
         config()->set('services.whatsapp.verify_token', 'test-verify-token');
         config()->set('services.whatsapp.app_secret', 'test-app-secret');
+        config()->set('services.whatsapp.phone_number_id', '999');
     }
 
     private function verify(array $params): TestResponse
@@ -39,11 +40,11 @@ class WhatsAppWebhookTest extends TestCase
         return $this->call('POST', self::URI, [], [], [], $server, $rawBody);
     }
 
-    private function envelope(array $messages = [], array $statuses = []): string
+    private function envelope(array $messages = [], array $statuses = [], string $phoneNumberId = '999'): string
     {
         $value = [
             'messaging_product' => 'whatsapp',
-            'metadata' => ['display_phone_number' => '15551234567', 'phone_number_id' => '999'],
+            'metadata' => ['display_phone_number' => '15551234567', 'phone_number_id' => $phoneNumberId],
         ];
 
         if ($messages !== []) {
@@ -166,6 +167,29 @@ class WhatsAppWebhookTest extends TestCase
             'HTTP_X_HUB_SIGNATURE_256' => 'sha256='.hash_hmac('sha256', $pretty, 'test-app-secret'),
         ];
         $this->call('POST', self::URI, [], [], [], $server, $compact)->assertStatus(403);
+    }
+
+    public function test_webhook_for_configured_number_is_accepted(): void
+    {
+        $response = $this->postRaw(
+            $this->envelope([$this->textMessage('wamid.1', '965000000001', 'مرحبا')])
+        );
+
+        $response->assertStatus(200);
+        $response->assertJson(['received' => 1]);
+    }
+
+    public function test_webhook_for_another_number_returns_200_with_zero_received(): void
+    {
+        Http::fake();
+
+        $response = $this->postRaw(
+            $this->envelope([$this->textMessage('wamid.1', '965000000001', 'مرحبا')], [], 'other-number-id')
+        );
+
+        $response->assertStatus(200);
+        $response->assertJson(['received' => 0]);
+        Http::assertNothingSent();
     }
 
     public function test_multiple_text_messages_are_acknowledged(): void
