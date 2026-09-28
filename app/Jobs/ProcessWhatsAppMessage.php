@@ -41,6 +41,19 @@ class ProcessWhatsAppMessage implements ShouldQueue
 
     public function handle(AiService $ai, WhatsAppService $whatsapp, BusinessProfileService $profiles): void
     {
+        // Defense-in-depth alongside the controller filter: a queued job must
+        // never process a message for a number other than the configured one
+        // (stale jobs, manual dispatches, test/prod mixups). Fail closed.
+        $configured = config('services.whatsapp.phone_number_id');
+
+        if (! is_string($configured) || $configured === '' || $this->recipientPhoneNumberId !== $configured) {
+            Log::warning('WhatsApp job ignored: recipient number mismatch.', [
+                'whatsapp_message_id' => $this->whatsappMessageId,
+            ]);
+
+            return;
+        }
+
         // Short DB transaction only: no external HTTP calls inside.
         $stored = DB::transaction(function (): ?array {
             try {
@@ -127,20 +140,41 @@ class ProcessWhatsAppMessage implements ShouldQueue
             return;
         }
 
-        $conversation->messages()->create([
-            'whatsapp_message_id' => $metaId,
-            'direction' => Message::DIRECTION_OUTGOING,
-            'content' => $decision->reply,
-            'ai_decision' => Message::DECISION_REPLY,
-        ]);
+        // Meta already accepted the message: NEVER send again from here.
+        // If local persistence fails, fail closed to human handling instead.
+        try {
+            DB::transaction(function () use ($conversation, $metaId, $decision): void {
+                $conversation->messages()->create([
+                    'whatsapp_message_id' => $metaId,
+                    'direction' => Message::DIRECTION_OUTGOING,
+                    'content' => $decision->reply,
+                    'ai_decision' => Message::DECISION_REPLY,
+                ]);
 
-        $conversation->update(['last_message_at' => now()]);
+                $conversation->update(['last_message_at' => now()]);
+            });
+        } catch (Throwable $e) {
+            Log::error('WhatsApp reply sent but outgoing persistence failed.', [
+                'conversation_id' => $conversation->id,
+                'whatsapp_message_id' => $metaId,
+                'error' => $e::class,
+            ]);
+
+            try {
+                $conversation->markWaitingHuman();
+            } catch (Throwable) {
+                // Database unusable; nothing more can be done without risking a duplicate send.
+            }
+        }
     }
 
     private function handOff(Conversation $conversation, Message $incoming): void
     {
-        $incoming->update(['ai_decision' => Message::DECISION_HANDOFF]);
-        $conversation->markWaitingHuman();
+        // DB writes only, kept together so no partial handoff state remains.
+        DB::transaction(function () use ($conversation, $incoming): void {
+            $incoming->update(['ai_decision' => Message::DECISION_HANDOFF]);
+            $conversation->markWaitingHuman();
+        });
     }
 
     private function isDuplicateMessage(QueryException $e): bool
@@ -149,6 +183,10 @@ class ProcessWhatsAppMessage implements ShouldQueue
             return false;
         }
 
-        return str_contains($e->getMessage(), "Duplicate entry '{$this->whatsappMessageId}'");
+        // MySQL duplicate entry for THIS incoming message: either the message
+        // ID appears in the entry value, or the messages unique index is named.
+        // Anything else (including conversation-phone races) is rethrown.
+        return str_contains($e->getMessage(), "Duplicate entry '{$this->whatsappMessageId}'")
+            || str_contains($e->getMessage(), 'messages_whatsapp_message_id_unique');
     }
 }

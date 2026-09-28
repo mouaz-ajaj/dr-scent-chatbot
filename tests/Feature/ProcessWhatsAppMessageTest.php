@@ -12,6 +12,7 @@ use App\Services\WhatsApp\WhatsAppService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -352,6 +353,68 @@ class ProcessWhatsAppMessageTest extends TestCase
 
         $this->assertSame($baseline, $levels['ai']);
         $this->assertSame($baseline, $levels['http']);
+    }
+
+    public function test_job_rejects_recipient_mismatch(): void
+    {
+        Http::fake();
+
+        $ai = $this->mock(AiService::class, function ($mock): void {
+            $mock->shouldNotReceive('decide');
+        });
+
+        $this->job(['recipientPhoneNumberId' => 'other-number'])
+            ->handle($ai, WhatsAppService::fromConfig(), new BusinessProfileService);
+
+        $this->assertSame(0, Conversation::count());
+        $this->assertSame(0, Message::count());
+        Http::assertNothingSent();
+    }
+
+    public function test_job_rejects_blank_configured_number(): void
+    {
+        config()->set('services.whatsapp.phone_number_id', '');
+        Http::fake();
+
+        $ai = $this->mock(AiService::class, function ($mock): void {
+            $mock->shouldNotReceive('decide');
+        });
+
+        $this->job()->handle($ai, WhatsAppService::fromConfig(), new BusinessProfileService);
+
+        $this->assertSame(0, Conversation::count());
+        $this->assertSame(0, Message::count());
+        Http::assertNothingSent();
+    }
+
+    public function test_post_send_persistence_failure_never_resends(): void
+    {
+        Log::spy();
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.meta-1']]], 200)]);
+
+        // Pre-seed the exact Meta ID so the outgoing insert fails after send.
+        $conversation = Conversation::create(['phone_number' => '965000000001']);
+        $conversation->messages()->create([
+            'whatsapp_message_id' => 'wamid.meta-1',
+            'direction' => Message::DIRECTION_OUTGOING,
+            'content' => 'seeded',
+        ]);
+
+        $this->job()->handle($this->aiReply('رد مؤكد.'), WhatsAppService::fromConfig(), new BusinessProfileService);
+
+        Http::assertSentCount(1);
+
+        $fresh = $conversation->fresh();
+        $this->assertSame(Conversation::STATUS_WAITING_HUMAN, $fresh->status);
+        $this->assertTrue($fresh->needs_human);
+
+        $this->assertDatabaseHas('messages', [
+            'whatsapp_message_id' => 'wamid.current-1',
+            'ai_decision' => Message::DECISION_REPLY,
+        ]);
+        $this->assertSame(1, Message::where('direction', Message::DIRECTION_OUTGOING)->count());
+
+        Log::shouldHaveReceived('error')->once();
     }
 
     public function test_job_does_not_retry_processing(): void

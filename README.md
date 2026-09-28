@@ -1,58 +1,169 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# DR.SCENT WhatsApp AI Business Assistant
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+## Project purpose
 
-## About Laravel
+A customer asks a question on WhatsApp. Laravel receives it, loads the
+Business Profile plus recent conversation history, and asks Gemini for one
+structured decision:
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
-
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
-
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
-
-## Learning Laravel
-
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
-
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
-
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
-
-## Agentic Development
-
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
-
-```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+```text
+WhatsApp customer question
+  → Laravel
+  → Gemini + Business Profile + history
+  → reply  OR  silent handoff
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+- **reply**: the answer is clearly supported by the Business Profile → the bot
+  sends exactly one WhatsApp reply.
+- **handoff**: information is missing, incomplete, conflicting, or requires
+  guessing → the bot sends **NOTHING** and the conversation becomes
+  `waiting_human` until a human resumes it with
+  `php artisan whatsapp:resume {phone}`.
 
-## Contributing
+Core principle: **if answering requires guessing, hand off silently.**
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+## Current MVP scope
 
-## Code of Conduct
+Included:
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+- Business Profile answers (`storage/app/private/business_profile.json`)
+- Meta WhatsApp Cloud API transport (webhook + send, TEST number only)
+- Gemini structured decisions (`reply` / `handoff`)
+- recent conversation history (previous 10 messages, current message separate)
+- database queue (`ProcessWhatsAppMessage`, one worker, no retries)
+- silent handoff (`waiting_human`) + `whatsapp:resume` command
 
-## Security Vulnerabilities
+Explicitly excluded:
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+- products database, orders, stock
+- RAG, Knowledge Base, embeddings
+- dashboard, human inbox UI
+- authentication, multi-business support, analytics
 
-## License
+## Architecture
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+```text
+Meta webhook (signed POST)
+  ↓  GET verification: hub.mode + hub.verify_token → hub.challenge
+WhatsAppWebhookController
+  ↓  verifies X-Hub-Signature-256 (HMAC-SHA256, raw body, hash_equals)
+  ↓  parses text messages only (WhatsAppWebhookParser)
+  ↓  keeps messages for the configured WHATSAPP_PHONE_NUMBER_ID
+  ↓  dispatches ProcessWhatsAppMessage per message → HTTP 200
+Queue (database driver, ONE worker, tries=1, timeout=60)
+  ↓
+ProcessWhatsAppMessage
+  ├─ recipient-ID guard (fail closed on mismatch/blank config)
+  ├─ find/create Conversation by sender phone (unique)
+  ├─ store incoming Message (UNIQUE whatsapp_message_id = idempotency)
+  ├─ waiting_human? → stop silently (no AI, no send)
+  ├─ BusinessProfileService → profile (failure → silent handoff)
+  ├─ previous 10 messages as history (current message excluded)
+  ├─ AiService (GeminiService) → AiReplyDecision
+  ├─ reply   → WhatsAppService::sendText once → store outgoing (Meta ID)
+  └─ handoff → store decision, mark waiting_human, send NOTHING
+```
+
+Short DB transactions wrap DB-only writes; Gemini/Meta HTTP calls always run
+outside transactions. After a confirmed Meta send the message is never sent
+again, even if local persistence fails (fail closed to human handling).
+
+## Requirements
+
+- PHP `^8.3` (per `composer.json`), Composer
+- Laravel Framework `^13.17`, MySQL
+- One database queue worker (`php artisan queue:work --tries=1 --timeout=60`)
+- Public HTTPS callback URL for Meta (webhook subscription)
+
+## Local setup
+
+```bash
+composer install
+copy .env.example .env        # Windows; on Linux/macOS use: cp .env.example .env
+php artisan key:generate
+# configure DB_* in .env, create the database, then:
+php artisan migrate
+php artisan serve
+php artisan queue:work --tries=1 --timeout=60
+```
+
+Tests use a separate MySQL database via `.env.testing` (see
+`.env.testing.example`); test files live in `tests/Feature` and `tests/Unit`.
+
+## Gemini configuration
+
+```env
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-3.5-flash-lite
+```
+
+The key is read from Laravel config (`config/services.php`), never hardcoded
+or logged. All automated tests use mocked HTTP — no real Gemini calls.
+
+Note: Google marks `responseSchema` as deprecated in favor of
+`responseFormat`. The working `responseSchema` mechanism is intentionally kept
+until the new contract can be verified against the live API; application-side
+validation in `AiReplyDecision` remains the source of truth either way.
+
+## WhatsApp TEST number configuration
+
+```env
+WHATSAPP_ACCESS_TOKEN=
+WHATSAPP_PHONE_NUMBER_ID=
+WHATSAPP_VERIFY_TOKEN=
+WHATSAPP_APP_SECRET=
+WHATSAPP_API_VERSION=
+WHATSAPP_BASE_URL=https://graph.facebook.com
+```
+
+During development use the **Meta TEST number only**. Do NOT connect the
+production number through these instructions.
+
+## Webhook
+
+Callback: `/api/webhooks/whatsapp`
+
+- `GET` — Meta verification: `hub.mode=subscribe` + matching
+  `hub.verify_token` returns `hub.challenge` (200), otherwise 403.
+- `POST` — signed events only: `X-Hub-Signature-256` is verified over the
+  exact raw body with the app secret before parsing; invalid/missing → 403.
+  Text messages for the configured number are queued; everything else is
+  acknowledged without action.
+
+## Queue
+
+ONE worker only for this MVP. Messages rely on DB uniqueness for idempotency
+and assume sequential processing. See `docs/DEPLOYMENT.md` before scaling.
+
+## Silent handoff
+
+`handoff` means: no reply, no apology, no "a human will contact you", no
+fallback text. The incoming message is stored with `ai_decision = handoff`,
+the conversation becomes `status = waiting_human` + `needs_human = true`,
+and later messages are stored silently until explicit resume.
+
+## Resume
+
+```bash
+php artisan whatsapp:resume {phone}
+```
+
+Exact phone string, never normalized. Only this command restores automation;
+new messages, time passing, sends, or restarts never auto-resume.
+
+## Testing
+
+```bash
+php artisan test --filter=ProcessWhatsAppMessageTest
+php artisan test --filter=WhatsAppWebhookTest
+php artisan test --filter=GeminiServiceTest
+php artisan test --filter=ConversationTest
+php artisan test   # full suite (release checkpoints only)
+```
+
+## Production number warning
+
+The real business number currently uses **WhatsApp Business App**. Production
+activation will later use the official **WhatsApp Business App + Cloud API
+Coexistence** flow. Do NOT perform full migration/deregistration unless
+explicitly approved. See `docs/DEPLOYMENT.md`.
